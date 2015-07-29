@@ -20,9 +20,7 @@ impData$logentrytime <- as.POSIXct(impData$logentrytime,
 impData$metro <- factor(impData$metro)
 impData$FavoriteMovieGenre <- as.character(impData$FavoriteMovieGenre)
 impData$tdid <- as.character(impData$tdid)
-
-# remove column we can ignore
-impData$logfileid     <- NULL
+impData$logfileid <- NULL
 
 # do some work on the site strings
 impData$site <- as.character(impData$site)
@@ -39,13 +37,6 @@ impData$userHourOfDay[normHours] = impData$userHourOfDay[normHours] - 5
 impData$userDayOfWeek <- factor(impData$userHourOfWeek %/% 24, labels = c("Sunday", "Monday", "Tuesday",
                                  "Wednesday", "Thursday", "Friday", "Saturday"))
 
-#impData$userTimeOfDay <- "Morning"
-#impData$userTimeOfDay[is.na(impData$userHourOfDay)] <- NA
-#impData$userTimeOfDay[impData$userHourOfDay >= 12 & impData$userHourOfDay <= 17] <- "Afternoon"
-#impData$userTimeOfDay[impData$userHourOfDay >= 18 & impData$userHourOfDay <= 23] <- "Night"
-#impData$userTimeOfDay[impData$userHourOfDay >= 0 & impData$userHourOfDay <= 5] <- "Late"
-#impData$userTimeOfDay <- factor(impData$userTimeOfDay)
-
 # split the data into those where we know the genre 
 # and those where we do not
 impKnown   <- subset(impData, FavoriteMovieGenre != "?????")
@@ -58,6 +49,7 @@ impUnknown$tdid <- as.factor(impUnknown$tdid)
 
 #~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~#
 
+# we'll use this function to summarize data by user
 Mode <- function(x) {
     names(which.max(table(x)))
 }
@@ -96,9 +88,6 @@ impVal$tdid <- as.factor(impVal$tdid)
 
 
 
-Mode <- function(x) {
-    names(which.max(table(x)))
-}
 
 meltSiteFmg <- melt(impTrain, id.vars=c("site", "FavoriteMovieGenre"), measure.vars=NULL, na.rm=TRUE)
 
