@@ -6,6 +6,7 @@ library(randomForest)
 library(rpart)
 library(rpart.plot)
 library(e1071)
+library(datasets)
 
 #~~~~~~~~~~~~ GETTING AND CLEANING DATA ~~~~~~~~~~~~#
 
@@ -30,41 +31,143 @@ impData$site <- factor(impData$site)
 
 # get some more info on when the impression was served
 impData$userHourOfDay <- impData$userHourOfWeek %% 24
-weeHours <- impData$userHourOfDay < 5 & !is.na(impData$userHourOfDay)
-normHours <- impData$userHourOfDay >= 5 & !is.na(impData$userHourOfDay)
-impData$userHourOfDay[weeHours] = impData$userHourOfDay[weeHours] + 19
-impData$userHourOfDay[normHours] = impData$userHourOfDay[normHours] - 5
-impData$userDayOfWeek <- factor(impData$userHourOfWeek %/% 24, labels = c("Sunday", "Monday", "Tuesday",
-                                 "Wednesday", "Thursday", "Friday", "Saturday"))
+# weeHours <- impData$userHourOfDay < 5 & !is.na(impData$userHourOfDay)
+# normHours <- impData$userHourOfDay >= 5 & !is.na(impData$userHourOfDay)
+# impData$userHourOfDay[weeHours] = impData$userHourOfDay[weeHours] + 19
+# impData$userHourOfDay[normHours] = impData$userHourOfDay[normHours] - 5
+impData$userDayOfWeek <- factor(impData$userHourOfWeek %/% 24, labels = c("Sunday", 
+                                 "Monday", "Tuesday", "Wednesday", "Thursday", 
+                                "Friday", "Saturday"))
+
+impData$browser <- as.character(impData$browser)
+impData$browser <- sub("InternetExplorer.*", "InternetExplorer", impData$browser)
+impData$browser <- factor(impData$browser)
+
+# get the region for the 50 states in the US
+data(state)
+impData$usregion <- sapply(as.character(impData$region), 
+                        function(x) state.region[pmatch(x, state.name)])
+impData$usregion[impData$region == "District of Columbia"] <- "Northeast"
+impData$usregion <- factor(impData$usregion)
+
+# create a variable that only uses the top 30 most popular sites
+impData$top50site <- as.character(impData$site)
+topSites <- names(sort(table(impKnown$site), decreasing=T)[1:50])
+impData$top50site[!(impData$top50site %in% topSites)] <- "other"
+impData$top50site <- factor(impData$top50site)
+
+# create a variable that only uses the top 30 most popular sites
+impData$top100site <- as.character(impData$site)
+topSites <- names(sort(table(impKnown$site), decreasing=T)[1:100])
+impData$top100site[!(impData$top100site %in% topSites)] <- "other"
+impData$top100site <- factor(impData$top100site)
 
 # split the data into those where we know the genre 
 # and those where we do not
-impKnown   <- subset(impData, FavoriteMovieGenre != "?????")
+impKnown <- subset(impData, FavoriteMovieGenre != "?????")
 impKnown$FavoriteMovieGenre <- as.factor(impKnown$FavoriteMovieGenre)
+impKnown$tdid <- factor(impKnown$tdid)
 
 impUnknown <- subset(impData, FavoriteMovieGenre == "?????")
 impUnknown$FavoriteMovieGenre <- NULL
-impUnknown$tdid <- as.factor(impUnknown$tdid)
+impUnknown$tdid <- factor(impUnknown$tdid)
 
 
 #~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~#
 
 # we'll use this function to summarize data by user
 Mode <- function(x) {
-    names(which.max(table(x)))
+    xtable <- table(x)
+    if (sum(xtable)) {
+        names(which.max(table(x)))
+    }
+    else 
+        NA
 }
 
-g <- ggplot(impTrain, aes(x = userHourOfDay))
-g <- g + geom_histogram(binwidth = 1)
-g <- g + facet_wrap( ~ userDayOfWeek, ncol=1)
-g
+userKnown <- ddply(impKnown, .(tdid), summarize, 
+    country = Mode(country),
+    region = Mode(region),
+    metro = Mode(metro),
+    city = Mode(city),
+    devicetype = Mode(devicetype),
+    osfamily = Mode(osfamily),
+    os = Mode(os),
+    browser = Mode(browser),
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre),
+    site = Mode(site),
+    usregion = Mode(usregion),
+    userDayOfWeek = Mode(userDayOfWeek),
+    userHourOfDay = mean(userHourOfDay)
+)
+rownames(userKnown) <- userKnown$tdid
+userKnown[2:13] <- as.data.frame(lapply(userKnown[2:13], factor))
+
+# Look at english-speaking countries vs rest of the world
+userKnown$english <- as.character(userKnown$country) %in%
+        c("United States", "United Kingdom", "Canada", "Ireland") 
+userKnown$usa <- as.character(userKnown$country) == "United States"
+
+# Just the distribution of favorite genres
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
+        geom_bar(stat="bin")
+
+# English-speaking vs everyone else
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
+        geom_bar(stat="bin") +
+        facet_wrap(~ english)
+
+# USA vs everyone else
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
+        geom_bar(stat="bin") +
+        facet_wrap(~ usa)
+
+# Breakdown of genre by country for non-US countries
+ggplot(userKnown[userKnown$country != "United States",], 
+        aes(x = country, fill = FavoriteMovieGenre)) + 
+        geom_bar(stat="bin")
+
+# Breakdown of genre by state in the US
+ggplot(userKnown[userKnown$country == "United States",], 
+        aes(x = region, fill = FavoriteMovieGenre)) + 
+        geom_bar(stat="bin")
+
+# Breakdown of genre by region in the US
+ggplot(userKnown[userKnown$country == "United States",], 
+        aes(x = usregion, fill = FavoriteMovieGenre)) + 
+        geom_bar(stat="bin", position = position_dodge())
+
+# Breakdown of devicetype by genre
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = devicetype)) + 
+        geom_bar(stat="bin")
+
+# Breakdown of browser by genre
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = browser)) + 
+        geom_bar(stat="bin")
+
+# Breakdown of genre by day of week
+ggplot(userKnown, aes(x = userDayOfWeek, fill = FavoriteMovieGenre)) + 
+        geom_bar(stat="bin")
+
+ggplot(impKnown[impKnown$top50site != "other",], 
+        aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
+        geom_bar(stat="bin") +
+        facet_wrap(~top50site)
+
+ggplot(impKnown[impKnown$top100site != "other",], 
+        aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
+        geom_bar(stat="bin") +
+        facet_wrap(~top100site)
+
 
 
 
 #~~~~~~~~~~~~ MODEL BUILDING ~~~~~~~~~~~~#
 
 # split into train and validation sets
-split <- sample.split(impKnown$FavoriteMovieGenre, SplitRatio = 0.7, group = impKnown$tdid)
+impKnown$tdid <- as.character(impKnown$tdid)
+split <- sample.split(impKnown$FavoriteMovieGenre, SplitRatio = 0.7, 
+                        group = impKnown$tdid)
 impTrain <- subset(impKnown,  split)
 impVal   <- subset(impKnown, !split)
 impTrain$tdid <- as.factor(impTrain$tdid)
@@ -216,14 +319,6 @@ rf2RowPredVal <- data.frame(tdid = impVal$tdid, preds = rf2PredVal)
 rownames(rf2RowPredVal) <- rownames(impVal)
 rf2TdidPredVal <- ddply(rf2RowPredVal, .(tdid), summarize, pred = Mode(preds))
 table(tdidGenreVal$FavoriteMovieGenre, rf2TdidPredVal$pred)
-
-
-
-
-
-
-
-
 
 
 
