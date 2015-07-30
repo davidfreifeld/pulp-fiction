@@ -50,18 +50,6 @@ impData$usregion <- sapply(as.character(impData$region),
 impData$usregion[impData$region == "District of Columbia"] <- "Northeast"
 impData$usregion <- factor(impData$usregion)
 
-# create a variable that only uses the top 30 most popular sites
-impData$top50site <- as.character(impData$site)
-topSites <- names(sort(table(impKnown$site), decreasing=T)[1:50])
-impData$top50site[!(impData$top50site %in% topSites)] <- "other"
-impData$top50site <- factor(impData$top50site)
-
-# create a variable that only uses the top 30 most popular sites
-impData$top100site <- as.character(impData$site)
-topSites <- names(sort(table(impKnown$site), decreasing=T)[1:100])
-impData$top100site[!(impData$top100site %in% topSites)] <- "other"
-impData$top100site <- factor(impData$top100site)
-
 # split the data into those where we know the genre 
 # and those where we do not
 impKnown <- subset(impData, FavoriteMovieGenre != "?????")
@@ -72,8 +60,17 @@ impUnknown <- subset(impData, FavoriteMovieGenre == "?????")
 impUnknown$FavoriteMovieGenre <- NULL
 impUnknown$tdid <- factor(impUnknown$tdid)
 
-
 #~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~#
+
+impKnown <- ddply(impKnown, .(userHourOfDay), transform, 
+                        totalHourOfDay = length(userHourOfDay))
+impKnown <- ddply(impKnown, .(FavoriteMovieGenre), transform, 
+                        totalFavoriteGenre = length(FavoriteMovieGenre))
+hourGenreKnown <- ddply(impKnown, .(userHourOfDay, FavoriteMovieGenre), summarize, 
+                        prop = length(FavoriteMovieGenre) / totalHourOfDay[1])
+
+ggplot(hourGenreKnown, aes(x = userHourOfDay, y = prop, fill = FavoriteMovieGenre)) +
+    geom_area()
 
 # we'll use this function to summarize data by user
 Mode <- function(x) {
@@ -108,6 +105,8 @@ userKnown$english <- as.character(userKnown$country) %in%
         c("United States", "United Kingdom", "Canada", "Ireland") 
 userKnown$usa <- as.character(userKnown$country) == "United States"
 
+
+
 # Just the distribution of favorite genres
 ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
         geom_bar(stat="bin")
@@ -141,6 +140,14 @@ ggplot(userKnown[userKnown$country == "United States",],
 ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = devicetype)) + 
         geom_bar(stat="bin")
 
+# Breakdown of osfamily by genre
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = osfamily)) + 
+        geom_bar(stat="bin")
+
+# Breakdown of genre by osfamily
+ggplot(userKnown, aes(x = osfamily, fill = FavoriteMovieGenre)) + 
+        geom_bar(stat="bin")
+
 # Breakdown of browser by genre
 ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = browser)) + 
         geom_bar(stat="bin")
@@ -149,15 +156,38 @@ ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = browser)) +
 ggplot(userKnown, aes(x = userDayOfWeek, fill = FavoriteMovieGenre)) + 
         geom_bar(stat="bin")
 
-ggplot(impKnown[impKnown$top50site != "other",], 
-        aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
-        geom_bar(stat="bin") +
-        facet_wrap(~top50site)
 
-ggplot(impKnown[impKnown$top100site != "other",], 
-        aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
-        geom_bar(stat="bin") +
-        facet_wrap(~top100site)
+# But we don't want to double-count sites
+# So let's look at one row per user-site pair:
+userSiteKnown <- ddply(impKnown, .(tdid, site), summarize,
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre))
+userSiteKnown$FavoriteMovieGenre <- factor(userSiteKnown$FavoriteMovieGenre)
+
+# look at the 100 most popular sites and their distributions of genre
+# userSiteKnown$top100site <- as.character(userSiteKnown$site)
+# topSites <- names(sort(table(userSiteKnown$site), decreasing=T)[1:100])
+# userSiteKnown$top100site[!(userSiteKnown$top100site %in% topSites)] <- "other"
+# userSiteKnown$top100site <- factor(userSiteKnown$top100site)
+
+# ggplot(userSiteKnown[userSiteKnown$top100site != "other",], 
+#         aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
+#         geom_bar(stat="bin") +
+#         facet_wrap(~top100site)
+
+
+# try to find the most "different" sites
+numPairs <- nrow(userSiteKnown)
+userSiteKnown <- ddply(userSiteKnown, .(FavoriteMovieGenre), transform,
+    genreProp = length(FavoriteMovieGenre) / numPairs)
+userSiteKnown <- ddply(userSiteKnown, .(site), transform,
+    siteLength = length(site))
+
+userSiteKnown <- ddply(userSiteKnown, .(site, FavoriteMovieGenre), transform,
+    diffScore = length(FavoriteMovieGenre) - genreProp[1] * siteLength[1])
+
+siteGenreDiffs <- ddply(userSiteKnown, .(site), summarize,
+    score = sum(diffScore^2))
+
 
 
 
