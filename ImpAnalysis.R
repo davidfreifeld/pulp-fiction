@@ -31,10 +31,10 @@ impData$site <- factor(impData$site)
 
 # get some more info on when the impression was served
 impData$userHourOfDay <- impData$userHourOfWeek %% 24
-# weeHours <- impData$userHourOfDay < 5 & !is.na(impData$userHourOfDay)
-# normHours <- impData$userHourOfDay >= 5 & !is.na(impData$userHourOfDay)
-# impData$userHourOfDay[weeHours] = impData$userHourOfDay[weeHours] + 19
-# impData$userHourOfDay[normHours] = impData$userHourOfDay[normHours] - 5
+weeHours <- impData$userHourOfDay < 5 & !is.na(impData$userHourOfDay)
+normHours <- impData$userHourOfDay >= 5 & !is.na(impData$userHourOfDay)
+impData$userHourOfDay[weeHours] = impData$userHourOfDay[weeHours] + 19
+impData$userHourOfDay[normHours] = impData$userHourOfDay[normHours] - 5
 impData$userDayOfWeek <- factor(impData$userHourOfWeek %/% 24, labels = c("Sunday", 
                                  "Monday", "Tuesday", "Wednesday", "Thursday", 
                                 "Friday", "Saturday"))
