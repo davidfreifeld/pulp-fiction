@@ -50,6 +50,24 @@ def run(urls, threshold = 0.8):
         maxCats.append(getMaxCat(category))
         time.sleep(10)
     return (categories, maxCats)
+    
+def writeFile(urls, categories, maxCats, fileName):
+    myFile = open(fileName, 'a+')
+    
+    catNames = ['Arts', 'Business', 'Science', 'Computers', 'Recreation', \
+        'Sports', 'Society', 'Health', 'Home', 'Games']
+    
+    myFile.write('URL,MaxCategory,MaxProb,' + ','.join(catNames) + '\n')
+    for i, cat in enumerate(categories): 
+        writeString = urls[i] + ','
+        writeString += maxCats[i][0] + ',' + str(maxCats[i][1])
+        if (len(cat)):
+            for catName in catNames:
+                writeString += ',' + str(cat[catName])
+        else:
+            writeString += ',,,,,,,,,,'
+        myFile.write(writeString + '\n')
+    myFile.close()
 
 sitesFile = open('sites.csv')
 siteHeader = sitesFile.readline()
@@ -57,5 +75,6 @@ sitesString = sitesFile.read()
 sitesFile.close()
 sitesList = sitesString.split('\n')
 
-urls = sitesList[:4000]
-categories, maxCats = run(urls, 0)
+urls = sitesList[4000:]
+categories2, maxCats2 = run(urls, 0)
+
