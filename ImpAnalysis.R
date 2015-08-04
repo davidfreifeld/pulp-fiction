@@ -14,6 +14,7 @@ library(datasets)
 setwd("C:/Users/David/workspace/Final Project/")
 impData <- read.table('ImpData.txt', header=T, sep='\t', 
         na.strings='(null)', quote="")
+siteData <- read.csv('categories1.csv', stringsAsFactors=F)
 
 # format some of the variables to dates and factors
 impData$logentrytime <- as.POSIXct(impData$logentrytime,
@@ -25,8 +26,12 @@ impData$logfileid <- NULL
 
 # do some work on the site strings
 impData$site <- as.character(impData$site)
-impData$site <- sub(".*\\.(.*\\..*)$", "\\1", impData$site)
+#impData$site <- sub(".*\\.(.*\\..*)$", "\\1", impData$site)
+impData$site <- sub("^www\\.(.*)", "\\1", impData$site)
 impData$site[grepl(".*\\.site-not-provided", impData$site)] <- NA
+
+impData <- merge(x = impData, y = siteData, by.x = 'site', by.y = 'URL', all.x = T)
+
 impData$site <- factor(impData$site)
 
 # get some more info on when the impression was served
@@ -35,9 +40,12 @@ weeHours <- impData$userHourOfDay < 5 & !is.na(impData$userHourOfDay)
 normHours <- impData$userHourOfDay >= 5 & !is.na(impData$userHourOfDay)
 impData$userHourOfDay[weeHours] = impData$userHourOfDay[weeHours] + 19
 impData$userHourOfDay[normHours] = impData$userHourOfDay[normHours] - 5
-impData$userDayOfWeek <- factor(impData$userHourOfWeek %/% 24, labels = c("Sunday", 
+impData$userDayOfWeek <- impData$userHourOfWeek %/% 24
+impData$userDayOfWeek[weeHours] <- impData$userDayOfWeek[weeHours] - 1
+impData$userDayOfWeek[impData$userDayOfWeek == -1] <- 6
+impData$userDayOfWeek <- factor(impData$userDayOfWeek, labels = c("Sunday", 
                                  "Monday", "Tuesday", "Wednesday", "Thursday", 
-                                "Friday", "Saturday"))
+                                 "Friday", "Saturday"))
 
 impData$browser <- as.character(impData$browser)
 impData$browser <- sub("InternetExplorer.*", "InternetExplorer", impData$browser)
@@ -66,11 +74,16 @@ impKnown <- ddply(impKnown, .(userHourOfDay), transform,
                         totalHourOfDay = length(userHourOfDay))
 impKnown <- ddply(impKnown, .(FavoriteMovieGenre), transform, 
                         totalFavoriteGenre = length(FavoriteMovieGenre))
-hourGenreKnown <- ddply(impKnown, .(userHourOfDay, FavoriteMovieGenre), summarize, 
-                        prop = length(FavoriteMovieGenre) / totalHourOfDay[1])
 
-ggplot(hourGenreKnown, aes(x = userHourOfDay, y = prop, fill = FavoriteMovieGenre)) +
-    geom_area()
+# hourGenreKnown <- ddply(impKnown, .(userHourOfDay, FavoriteMovieGenre), summarize, 
+#                         prop = length(FavoriteMovieGenre) / totalHourOfDay[1])
+# ggplot(hourGenreKnown, aes(x = userHourOfDay, y = prop, fill = FavoriteMovieGenre)) +
+#     geom_area()
+
+genreHourKnown <- ddply(impKnown, .(FavoriteMovieGenre, userHourOfDay), summarize,
+                        prop = length(userHourOfDay) / totalFavoriteGenre[1])
+ggplot(genreHourKnown, aes(x = userHourOfDay, y = prop)) + 
+    geom_histogram(stat="identity") + facet_wrap(~ FavoriteMovieGenre)
 
 # we'll use this function to summarize data by user
 Mode <- function(x) {
@@ -94,11 +107,12 @@ userKnown <- ddply(impKnown, .(tdid), summarize,
     FavoriteMovieGenre = Mode(FavoriteMovieGenre),
     site = Mode(site),
     usregion = Mode(usregion),
+    siteCategory = Mode(siteCategory),
     userDayOfWeek = Mode(userDayOfWeek),
     userHourOfDay = mean(userHourOfDay)
 )
 rownames(userKnown) <- userKnown$tdid
-userKnown[2:13] <- as.data.frame(lapply(userKnown[2:13], factor))
+userKnown[2:14] <- as.data.frame(lapply(userKnown[2:14], factor))
 
 # Look at english-speaking countries vs rest of the world
 userKnown$english <- as.character(userKnown$country) %in%
@@ -160,7 +174,8 @@ ggplot(userKnown, aes(x = userDayOfWeek, fill = FavoriteMovieGenre)) +
 # But we don't want to double-count sites
 # So let's look at one row per user-site pair:
 userSiteKnown <- ddply(impKnown, .(tdid, site), summarize,
-    FavoriteMovieGenre = Mode(FavoriteMovieGenre))
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre),
+    siteCategory = siteCategory[1])
 userSiteKnown$FavoriteMovieGenre <- factor(userSiteKnown$FavoriteMovieGenre)
 
 # look at the 100 most popular sites and their distributions of genre
@@ -189,6 +204,39 @@ siteGenreDiffs <- ddply(userSiteKnown, .(site), summarize,
     score = sum(diffScore^2))
 
 
+ggplot(na.omit(userSiteKnown), aes(x = FavoriteMovieGenre, fill = siteCategory)) + 
+    geom_bar(stat="bin")
+
+
+
+
+impMergedKnown <- merge(impKnown, siteClass, by.x = "site", by.y = "URL", all.x = T)
+impMergedKnown[c('Arts', 'Business', 'Science', 'Computers', 'Recreation', 
+        'Sports', 'Society', 'Health', 'Home', 'Games')][is.na(impMergedKnown[c('Arts', 'Business', 'Science', 'Computers', 'Recreation', 
+        'Sports', 'Society', 'Health', 'Home', 'Games')])] <- 0.1
+
+userCatKnown <- ddply(impMergedKnown, .(tdid), summarize,
+    country = Mode(country),
+    region = Mode(region),
+    metro = Mode(metro),
+    city = Mode(city),
+    devicetype = Mode(devicetype),
+    osfamily = Mode(osfamily),
+    os = Mode(os),
+    browser = Mode(browser),
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre),
+    usregion = Mode(usregion),
+    Arts = mean(Arts),
+    Business = mean(Business),
+    Science = mean(Science),
+    Computers = mean(Computers),
+    Recreation = mean(Recreation),
+    Sports = mean(Sports),
+    Society = mean(Society),
+    Health = mean(Health),
+    Home = mean(Home),
+    Games = mean(Games)
+)
 
 
 
@@ -202,9 +250,6 @@ impTrain <- subset(impKnown,  split)
 impVal   <- subset(impKnown, !split)
 impTrain$tdid <- as.factor(impTrain$tdid)
 impVal$tdid <- as.factor(impVal$tdid)
-
-
-
 
 
 
@@ -479,5 +524,3 @@ top20c2 <- countryFMGsum[order(countryFMGsum$BlindedGenre2, decreasing=T)[1:20],
 top20c3 <- countryFMGsum[order(countryFMGsum$BlindedGenre3, decreasing=T)[1:20], c(1,4), drop=F]
 top20c4 <- countryFMGsum[order(countryFMGsum$BlindedGenre4, decreasing=T)[1:20], c(1,5), drop=F]
 top20c5 <- countryFMGsum[order(countryFMGsum$BlindedGenre5, decreasing=T)[1:20], c(1,6), drop=F]
-
-# NOTE - NEED TO GROUP USERS TOGETHER LIKE IN THE AIRBNB ML POST

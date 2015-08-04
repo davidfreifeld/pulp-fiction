@@ -18,6 +18,9 @@ def getSiteClassificationData(apiKey, classifierName, url):
     except urllib2.HTTPError:
         print "Error for url " + url
         return {}
+    except urllib2.URLError:
+        print "Error for url " + url
+        return {}
 
 def getCategories(dataDict):
     categoryDict = {}
@@ -39,33 +42,21 @@ def getMaxCat(categories, threshold = 0):
             maxClass = cat
     return (maxClass, maxProb)
 
-def run(urls, threshold = 0.8):
-    categories = []
-    maxCats = []
-    for url in urls:
-        print "Getting site " + url
-        dataDict = getSiteClassificationData(apiKey, classifierName, url)
-        category = getCategories(dataDict)
-        categories.append(category)
-        maxCats.append(getMaxCat(category))
-        time.sleep(10)
-    return (categories, maxCats)
-    
+
 def writeFile(urls, categories, maxCats, fileName):
     myFile = open(fileName, 'a+')
     
     catNames = ['Arts', 'Business', 'Science', 'Computers', 'Recreation', \
         'Sports', 'Society', 'Health', 'Home', 'Games']
     
-    myFile.write('URL,MaxCategory,MaxProb,' + ','.join(catNames) + '\n')
+    myFile.write('URL,' + ','.join(catNames) + '\n')
     for i, cat in enumerate(categories): 
         writeString = urls[i] + ','
-        writeString += maxCats[i][0] + ',' + str(maxCats[i][1])
         if (len(cat)):
             for catName in catNames:
                 writeString += ',' + str(cat[catName])
         else:
-            writeString += ',,,,,,,,,,'
+            writeString += ',,,,,,,,'
         myFile.write(writeString + '\n')
     myFile.close()
 
@@ -75,6 +66,31 @@ sitesString = sitesFile.read()
 sitesFile.close()
 sitesList = sitesString.split('\n')
 
-urls = sitesList[4000:]
-categories2, maxCats2 = run(urls, 0)
+urls = sitesList[4252:]
 
+threshold = 0
+categories2 = []
+
+fileName = 'categories.csv'
+myFile = open(fileName, 'a+')
+catNames = ['Arts', 'Business', 'Science', 'Computers', 'Recreation', \
+        'Sports', 'Society', 'Health', 'Home', 'Games']
+#myFile.write('URL,' + ','.join(catNames) + '\n')
+
+for url in urls:
+    print "Getting site " + url
+    writeString = url
+    
+    dataDict = getSiteClassificationData(apiKey, classifierName, url)
+    category = getCategories(dataDict)
+    if (len(category)):
+        for catName in catNames:
+            writeString += ',' + str(category[catName])
+    else:
+        writeString += ',,,,,,,,,,'
+    myFile.write(writeString + '\n')
+    
+    categories2.append(category)
+    time.sleep(13)
+    
+myFile.close()
