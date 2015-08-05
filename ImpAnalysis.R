@@ -7,6 +7,7 @@ library(rpart)
 library(rpart.plot)
 library(e1071)
 library(datasets)
+library(cluster)
 
 threshold = 0.75
 
@@ -124,7 +125,8 @@ impUnknown$tdid <- factor(impUnknown$tdid)
 
 impData$tdid <- factor(impData$tdid)
 
-#~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~#
+
+#~~~~~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~~~~~#
 
 # we'll use this function to summarize data by user
 Mode <- function(x) {
@@ -137,22 +139,96 @@ Mode <- function(x) {
 }
 
 # Try to get a matrix of distances between sites
-userSite <- ddply(impData, .(site, tdid), summarize, 
+userSite <- na.omit(ddply(impData, .(site, tdid), summarize, 
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre)))
+
+# userSiteMerge <- merge(x = userSite, y = userSite, by = "tdid", all = T)
+# siteSplits <- split(userSiteMerge$site.x, userSiteMerge$site.y)
+# numSites <- length(siteSplits)
+
+# siteOverlapMat <- matrix(rep(0,numSites*numSites), nrow = numSites, 
+#     dimnames = list(names(siteSplits), names(siteSplits)))
+
+# for (urli in names(siteSplits)) {
+#     for (urlj in as.character(siteSplits[[urli]])) {
+#         if (!is.na(urlj)) {
+#             siteOverlapMat[urli, urlj] = siteOverlapMat[urli, urlj] + 1
+#         }
+#     }
+# }
+
+siteOverlapMat <- as.matrix(read.csv('siteOverlapMat.csv', row.names=1))
+colnames(siteOverlapMat) <- rownames(siteOverlapMat)
+
+maxOverlap <- max(siteOverlapMat) + 1
+siteDistMat <- (maxOverlap - siteOverlapMat)^2
+siteDist <- as.dist(siteDistMat)
+
+k = 8
+pamSite <- pam(siteDist, k)
+
+impKnown$sitecluster <- sapply(as.character(impKnown$site), function(x) {
+    if (is.na(x)) {
+        NA
+    }
+    else {
+        pamSite$clustering[[x]]
+    }
+})
+
+ggplot(impKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+    geom_bar(stat="bin") + 
+    facet_grid(~ sitecluster)
+
+
+userSiteGenreKnown <- ddply(impKnown, .(tdid, site), summarize,
     FavoriteMovieGenre = Mode(FavoriteMovieGenre))
-userSiteMerge <- merge(x = userSite, y = userSite, by = "tdid", all = T)
-siteSplits <- split(userSiteMerge$site.x, userSiteMerge$site.y)
-numSites <- length(siteSplits)
 
-siteDistMat <- matrix(rep(0,numSites*numSites), nrow = numSites, 
-    dimnames = list(names(siteSplits), names(siteSplits)))
-
-for (urli in names(siteSplits)) {
-    for (urlj in as.character(siteSplits[[urli]])) {
-        if (!is.na(urlj)) {
-            siteDistMat[urli, urlj] = siteDistMat[urli, urlj] + 1
+userSiteGenreKnown$sitecluster <- sapply(as.character(userSiteGenreKnown$site), 
+    function(x) {
+        if (is.na(x)) {
+            NA
+        }
+        else {
+            pamSite$clustering[[x]]
         }
     }
+)
+
+ggplot(userSiteGenreKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+    geom_bar(stat="bin") + 
+    facet_grid(~ sitecluster)
+
+
+# let's try it now with users 
+numSites <- length(levels(userSite$site))
+numUsers <- length(levels(userSite$tdid))
+userSiteCounts <- matrix(rep(0, numUsers*numSites), nrow = numUsers, 
+    dimnames = list(levels(userSite$tdid), levels(userSite$site)))
+
+for (i in 1:nrow(userSite)) {
+    userSiteCounts[as.character(userSite[i,"tdid"]), as.character(userSite[i,"site"])] = 
+        userSiteCounts[as.character(userSite[i,"tdid"]), as.character(userSite[i,"site"])] + 1
 }
+
+# do clustering
+k = 7
+kmc <- kmeans(userSiteCounts, centers = k, iter.max = 1000)
+
+userGenre <- ddply(impKnown, .(tdid), summarize, 
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre))
+
+userGenre$sitecluster <- sapply(as.character(userGenre$tdid), function(x) {
+    kmc$cluster[[x]]
+})
+
+ggplot(userGenre, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+    geom_bar(stat="bin") + 
+    facet_grid(~ sitecluster)
+
+
+
+
 
 # First let's explore favorite genre by hour of the day
 impKnown <- ddply(impKnown, .(userHourOfDay), transform, 
