@@ -66,16 +66,16 @@ sitesString = sitesFile.read()
 sitesFile.close()
 sitesList = sitesString.split('\n')
 
-urls = sitesList[4252:]
+urls = sitesList[:1500]
 
 threshold = 0
 categories2 = []
 
-fileName = 'categories.csv'
+fileName = 'categories2.csv'
 myFile = open(fileName, 'a+')
 catNames = ['Arts', 'Business', 'Science', 'Computers', 'Recreation', \
         'Sports', 'Society', 'Health', 'Home', 'Games']
-#myFile.write('URL,' + ','.join(catNames) + '\n')
+myFile.write('URL,' + ','.join(catNames) + '\n')
 
 for url in urls:
     print "Getting site " + url
@@ -91,6 +91,6 @@ for url in urls:
     myFile.write(writeString + '\n')
     
     categories2.append(category)
-    time.sleep(13)
+    time.sleep(5)
     
 myFile.close()

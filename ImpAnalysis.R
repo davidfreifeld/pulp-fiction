@@ -8,13 +8,15 @@ library(rpart.plot)
 library(e1071)
 library(datasets)
 
+threshold = 0.75
+
 #~~~~~~~~~~~~ GETTING AND CLEANING DATA ~~~~~~~~~~~~#
 
 # first read in the data file (strings will be factors)
 setwd("C:/Users/David/workspace/Final Project/")
 impData <- read.table('ImpData.txt', header=T, sep='\t', 
         na.strings='(null)', quote="")
-siteData <- read.csv('categories1.csv', stringsAsFactors=F)
+siteData <- read.csv('categories.csv', stringsAsFactors=F)
 
 # format some of the variables to dates and factors
 impData$logentrytime <- as.POSIXct(impData$logentrytime,
@@ -32,17 +34,63 @@ impData$site[grepl(".*\\.site-not-provided", impData$site)] <- NA
 
 impData <- merge(x = impData, y = siteData, by.x = 'site', by.y = 'URL', all.x = T)
 
+impData$sitecategory <- "Unclassified"
+maxSiteScores <- apply(impData[14:23],1,max)
+impData$sitecategory[!is.na(maxSiteScores) & maxSiteScores > threshold] <- 
+    colnames(impData[14:23])[
+        apply(impData[!is.na(maxSiteScores) & maxSiteScores > threshold, 
+            c(14:23)], 1, which.max)
+    ]
+
+impData$sitecategory <- factor(impData$sitecategory)
 impData$site <- factor(impData$site)
 
 # get some more info on when the impression was served
+bHourNA <- is.na(impData$userHourOfWeek)
 impData$userHourOfDay <- impData$userHourOfWeek %% 24
-weeHours <- impData$userHourOfDay < 5 & !is.na(impData$userHourOfDay)
-normHours <- impData$userHourOfDay >= 5 & !is.na(impData$userHourOfDay)
-impData$userHourOfDay[weeHours] = impData$userHourOfDay[weeHours] + 19
-impData$userHourOfDay[normHours] = impData$userHourOfDay[normHours] - 5
+weeHours <- impData$userHourOfDay < 5 & !bHourNA
+normHours <- impData$userHourOfDay >= 5 & !bHourNA
+impData$userHourOfDay[weeHours] <- impData$userHourOfDay[weeHours] + 19
+impData$userHourOfDay[normHours] <- impData$userHourOfDay[normHours] - 5
 impData$userDayOfWeek <- impData$userHourOfWeek %/% 24
 impData$userDayOfWeek[weeHours] <- impData$userDayOfWeek[weeHours] - 1
 impData$userDayOfWeek[impData$userDayOfWeek == -1] <- 6
+
+impData$userPeriodOfWeek <- impData$userHourOfDay
+bSunday <- impData$userDayOfWeek == 0 & !bHourNA
+bWeekday <- impData$userDayOfWeek > 0 & impData$userDayOfWeek < 6 & !bHourNA
+bSaturday <- impData$userDayOfWeek == 6 & !bHourNA
+bSundayMorn <- bSunday & impData$userHourOfDay >= 0 & impData$userHourOfDay <= 5 & !bHourNA
+bSundayAft <- bSunday & impData$userHourOfDay >= 6 & impData$userHourOfDay <= 11 & !bHourNA
+bSundayEve <- bSunday & impData$userHourOfDay >= 12 & impData$userHourOfDay <= 17 & !bHourNA
+bSundayLate <- bSunday & impData$userHourOfDay >= 18 & impData$userHourOfDay <= 23 & !bHourNA
+bWeekdayMorn <- bWeekday & impData$userHourOfDay >= 0 & impData$userHourOfDay <= 5 & !bHourNA
+bWeekdayAft <- bWeekday & impData$userHourOfDay >= 6 & impData$userHourOfDay <= 11 & !bHourNA
+bWeekdayEve <- bWeekday & impData$userHourOfDay >= 12 & impData$userHourOfDay <= 17 & !bHourNA
+bWeekdayLate <- bWeekday & impData$userHourOfDay >= 18 & impData$userHourOfDay <= 23 & !bHourNA
+bSaturdayMorn <- bSaturday & impData$userHourOfDay >= 0 & impData$userHourOfDay <= 5 & !bHourNA
+bSaturdayAft <- bSaturday & impData$userHourOfDay >= 6 & impData$userHourOfDay <= 11 & !bHourNA
+bSaturdayEve <- bSaturday & impData$userHourOfDay >= 12 & impData$userHourOfDay <= 17 & !bHourNA
+bSaturdayLate <- bSaturday & impData$userHourOfDay >= 18 & impData$userHourOfDay <= 23 & !bHourNA
+
+impData$userPeriodOfWeek[bSundayMorn] <- 0
+impData$userPeriodOfWeek[bSundayAft] <- 1
+impData$userPeriodOfWeek[bSundayEve] <- 2
+impData$userPeriodOfWeek[bSundayLate] <- 3
+impData$userPeriodOfWeek[bWeekdayMorn] <- 4
+impData$userPeriodOfWeek[bWeekdayAft] <- 5
+impData$userPeriodOfWeek[bWeekdayEve] <- 6
+impData$userPeriodOfWeek[bWeekdayLate] <- 7
+impData$userPeriodOfWeek[bSaturdayMorn] <- 8
+impData$userPeriodOfWeek[bSaturdayAft] <- 9
+impData$userPeriodOfWeek[bSaturdayEve] <- 10
+impData$userPeriodOfWeek[bSaturdayLate] <- 11
+
+impData$userPeriodOfWeek <- factor(impData$userPeriodOfWeek, labels = c("SundayMorn",
+                                 "SundayAft", "SundayEve", "SundayLate", "WeekdayMorn",
+                                 "WeekdayAft", "WeekdayEve", "WeekdayLate",
+                                 "SaturdayMorn", "SaturdayAft", "SaturdayEve", 
+                                 "SaturdayLate"))
 impData$userDayOfWeek <- factor(impData$userDayOfWeek, labels = c("Sunday", 
                                  "Monday", "Tuesday", "Wednesday", "Thursday", 
                                  "Friday", "Saturday"))
@@ -58,6 +106,12 @@ impData$usregion <- sapply(as.character(impData$region),
 impData$usregion[impData$region == "District of Columbia"] <- "Northeast"
 impData$usregion <- factor(impData$usregion)
 
+# Look at english-speaking countries vs rest of the world
+impData$english <- as.character(impData$country) %in%
+        c("United States", "United Kingdom", "Canada", "Ireland", 
+            "Australia", "New Zealand") 
+impData$usa <- as.character(impData$country) == "United States"
+
 # split the data into those where we know the genre 
 # and those where we do not
 impKnown <- subset(impData, FavoriteMovieGenre != "?????")
@@ -68,22 +122,9 @@ impUnknown <- subset(impData, FavoriteMovieGenre == "?????")
 impUnknown$FavoriteMovieGenre <- NULL
 impUnknown$tdid <- factor(impUnknown$tdid)
 
+impData$tdid <- factor(impData$tdid)
+
 #~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~#
-
-impKnown <- ddply(impKnown, .(userHourOfDay), transform, 
-                        totalHourOfDay = length(userHourOfDay))
-impKnown <- ddply(impKnown, .(FavoriteMovieGenre), transform, 
-                        totalFavoriteGenre = length(FavoriteMovieGenre))
-
-# hourGenreKnown <- ddply(impKnown, .(userHourOfDay, FavoriteMovieGenre), summarize, 
-#                         prop = length(FavoriteMovieGenre) / totalHourOfDay[1])
-# ggplot(hourGenreKnown, aes(x = userHourOfDay, y = prop, fill = FavoriteMovieGenre)) +
-#     geom_area()
-
-genreHourKnown <- ddply(impKnown, .(FavoriteMovieGenre, userHourOfDay), summarize,
-                        prop = length(userHourOfDay) / totalFavoriteGenre[1])
-ggplot(genreHourKnown, aes(x = userHourOfDay, y = prop)) + 
-    geom_histogram(stat="identity") + facet_wrap(~ FavoriteMovieGenre)
 
 # we'll use this function to summarize data by user
 Mode <- function(x) {
@@ -95,6 +136,58 @@ Mode <- function(x) {
         NA
 }
 
+# Try to get a matrix of distances between sites
+userSite <- ddply(impData, .(site, tdid), summarize, 
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre))
+userSiteMerge <- merge(x = userSite, y = userSite, by = "tdid", all = T)
+siteSplits <- split(userSiteMerge$site.x, userSiteMerge$site.y)
+numSites <- length(siteSplits)
+
+siteDistMat <- matrix(rep(0,numSites*numSites), nrow = numSites, 
+    dimnames = list(names(siteSplits), names(siteSplits)))
+
+for (urli in names(siteSplits)) {
+    for (urlj in as.character(siteSplits[[urli]])) {
+        if (!is.na(urlj)) {
+            siteDistMat[urli, urlj] = siteDistMat[urli, urlj] + 1
+        }
+    }
+}
+
+# First let's explore favorite genre by hour of the day
+impKnown <- ddply(impKnown, .(userHourOfDay), transform, 
+                        totalHourOfDay = length(userHourOfDay))
+impKnown <- ddply(impKnown, .(FavoriteMovieGenre), transform, 
+                        totalFavoriteGenre = length(FavoriteMovieGenre))
+
+genreHourKnown <- ddply(impKnown, .(FavoriteMovieGenre, userHourOfDay), summarize,
+                        prop = length(userHourOfDay) / totalFavoriteGenre[1])
+ggplot(genreHourKnown, aes(x = userHourOfDay, y = prop)) + 
+    geom_histogram(stat="identity") + facet_wrap(~ FavoriteMovieGenre)
+
+# hourGenreKnown <- ddply(impKnown, .(userHourOfDay, FavoriteMovieGenre), summarize, 
+#                         prop = length(FavoriteMovieGenre) / totalHourOfDay[1])
+# ggplot(hourGenreKnown, aes(x = userHourOfDay, y = prop, fill = FavoriteMovieGenre)) +
+#     geom_area()
+
+
+
+
+
+## Impute means for NA values of site category features:
+# impKnown <- transform(impKnown, 
+#     Arts = ifelse(is.na(Arts), mean(Arts, na.rm=TRUE), Arts),
+#     Business = ifelse(is.na(Business), mean(Business, na.rm=TRUE), Business),
+#     Science = ifelse(is.na(Science), mean(Science, na.rm=TRUE), Science),
+#     Computers = ifelse(is.na(Computers), mean(Computers, na.rm=TRUE), Computers),
+#     Recreation = ifelse(is.na(Recreation), mean(Recreation, na.rm=TRUE), Recreation),
+#     Sports = ifelse(is.na(Sports), mean(Sports, na.rm=TRUE), Sports),
+#     Society = ifelse(is.na(Society), mean(Society, na.rm=TRUE), Society),
+#     Health = ifelse(is.na(Health), mean(Health, na.rm=TRUE), Health),
+#     Home = ifelse(is.na(Home), mean(Home, na.rm=TRUE), Home),
+#     Games = ifelse(is.na(Games), mean(Games, na.rm=TRUE), Games)
+# )
+
 userKnown <- ddply(impKnown, .(tdid), summarize, 
     country = Mode(country),
     region = Mode(region),
@@ -105,20 +198,35 @@ userKnown <- ddply(impKnown, .(tdid), summarize,
     os = Mode(os),
     browser = Mode(browser),
     FavoriteMovieGenre = Mode(FavoriteMovieGenre),
-    site = Mode(site),
     usregion = Mode(usregion),
-    siteCategory = Mode(siteCategory),
     userDayOfWeek = Mode(userDayOfWeek),
-    userHourOfDay = mean(userHourOfDay)
+    userPeriodOfWeek = Mode(userPeriodOfWeek),
+    english = as.logical(Mode(english)),
+    usa = as.logical(Mode(usa)),
+    userHourOfDay = mean(userHourOfDay),
+    Arts = mean(Arts, na.rm=TRUE),
+    Business = mean(Business, na.rm=TRUE),
+    Science = mean(Science, na.rm=TRUE),
+    Computers = mean(Computers, na.rm=TRUE),
+    Recreation = mean(Recreation, na.rm=TRUE),
+    Sports = mean(Sports, na.rm=TRUE),
+    Society = mean(Society, na.rm=TRUE),
+    Health = mean(Health, na.rm=TRUE),
+    Home = mean(Home, na.rm=TRUE),
+    Games = mean(Games, na.rm=TRUE),
+    bArts = "Arts" %in% sitecategory,
+    bBusiness = "Business" %in% sitecategory,
+    bScience = "Science" %in% sitecategory,
+    bComputers = "Computers" %in% sitecategory,
+    bRecreation = "Recreation" %in% sitecategory,
+    bSports = "Sports" %in% sitecategory,
+    bSociety = "Society" %in% sitecategory,
+    bHealth = "Health" %in% sitecategory,
+    bHome = "Home" %in% sitecategory,
+    bGames = "Games" %in% sitecategory
 )
 rownames(userKnown) <- userKnown$tdid
-userKnown[2:14] <- as.data.frame(lapply(userKnown[2:14], factor))
-
-# Look at english-speaking countries vs rest of the world
-userKnown$english <- as.character(userKnown$country) %in%
-        c("United States", "United Kingdom", "Canada", "Ireland") 
-userKnown$usa <- as.character(userKnown$country) == "United States"
-
+userKnown[2:13] <- as.data.frame(lapply(userKnown[2:13], factor))
 
 
 # Just the distribution of favorite genres
@@ -171,6 +279,22 @@ ggplot(userKnown, aes(x = userDayOfWeek, fill = FavoriteMovieGenre)) +
         geom_bar(stat="bin")
 
 
+
+
+
+userKnownCatMelt <- melt(userKnown, measure.vars = 27:36)
+
+ggplot(userKnownCatMelt, aes(x = variable, fill = value)) +
+        geom_bar(stat="bin", position = position_dodge()) +
+        facet_wrap(~ FavoriteMovieGenre )
+
+# ggplot(userKnownCatMelt, aes(x = variable, y = value, fill = variable)) +
+#         geom_boxplot() +
+#         facet_grid(. ~ FavoriteMovieGenre)
+
+
+
+
 # But we don't want to double-count sites
 # So let's look at one row per user-site pair:
 userSiteKnown <- ddply(impKnown, .(tdid, site), summarize,
@@ -210,34 +334,6 @@ ggplot(na.omit(userSiteKnown), aes(x = FavoriteMovieGenre, fill = siteCategory))
 
 
 
-impMergedKnown <- merge(impKnown, siteClass, by.x = "site", by.y = "URL", all.x = T)
-impMergedKnown[c('Arts', 'Business', 'Science', 'Computers', 'Recreation', 
-        'Sports', 'Society', 'Health', 'Home', 'Games')][is.na(impMergedKnown[c('Arts', 'Business', 'Science', 'Computers', 'Recreation', 
-        'Sports', 'Society', 'Health', 'Home', 'Games')])] <- 0.1
-
-userCatKnown <- ddply(impMergedKnown, .(tdid), summarize,
-    country = Mode(country),
-    region = Mode(region),
-    metro = Mode(metro),
-    city = Mode(city),
-    devicetype = Mode(devicetype),
-    osfamily = Mode(osfamily),
-    os = Mode(os),
-    browser = Mode(browser),
-    FavoriteMovieGenre = Mode(FavoriteMovieGenre),
-    usregion = Mode(usregion),
-    Arts = mean(Arts),
-    Business = mean(Business),
-    Science = mean(Science),
-    Computers = mean(Computers),
-    Recreation = mean(Recreation),
-    Sports = mean(Sports),
-    Society = mean(Society),
-    Health = mean(Health),
-    Home = mean(Home),
-    Games = mean(Games)
-)
-
 
 
 #~~~~~~~~~~~~ MODEL BUILDING ~~~~~~~~~~~~#
@@ -251,6 +347,35 @@ impVal   <- subset(impKnown, !split)
 impTrain$tdid <- as.factor(impTrain$tdid)
 impVal$tdid <- as.factor(impVal$tdid)
 
+rfFeatures <- c("tdid", "FavoriteMovieGenre", "userPeriodOfWeek", "Arts", "Business", 
+    "Science", "english", "devicetype",
+    "Computers", "Recreation", "Sports", "Society", "Health", "Home", "Games")
+    # "userHourOfDay", "userDayOfWeek", 
+
+rfImpTrain <- na.omit(impTrain[, rfFeatures])
+rfImpVal <- na.omit(impVal[, rfFeatures])
+
+rfMod <- randomForest(FavoriteMovieGenre ~ . - tdid, data = rfImpTrain)
+rfMod
+rfPredTrain <- predict(rfMod)
+table(rfImpTrain$FavoriteMovieGenre, rfPredTrain)
+
+rfPredVal <- predict(rfMod, newdata=rfImpVal)
+table(rfImpVal$FavoriteMovieGenre, rfPredVal)
+
+rfImpTrain$pred <- rfPredTrain
+rfUserTrain <- ddply(rfImpTrain, .(tdid), summarize,
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre),
+    pred = Mode(pred)
+)
+table(rfUserTrain$FavoriteMovieGenre, rfUserTrain$pred)
+
+rfImpVal$pred <- rfPredVal
+rfUserVal <- ddply(rfImpVal, .(tdid), summarize,
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre),
+    pred = Mode(pred)
+)
+table(rfUserVal$FavoriteMovieGenre, rfUserVal$pred)
 
 
 
@@ -503,24 +628,3 @@ rfpred1 <- predict(rf1, newdata = userVal)
 tree1 <- rpart(FavoriteMovieGenre ~ userHourOfDay + osfamily + os + browser + devicetype + country + SiteWgt1 + SiteWgt2 + SiteWgt3 + SiteWgt4 + SiteWgt5, data = userTrain)
 treepred1 <- predict(tree1, newdata = userVal, type="class")
 
-
-# ********** EXPLORATORY ANALYSIS ************** #
-
-# get counts of favorite genre based on site visited
-meltSiteDF <- melt(impTrain, id.vars=c("FavoriteMovieGenre", "site"), measure.vars=NULL)
-siteFMGsum <- dcast(meltSiteDF, site ~ FavoriteMovieGenre)
-
-top20s1 <- siteFMGsum[order(siteFMGsum$BlindedGenre1, decreasing=T)[1:20], c(1,2), drop=F]
-top20s2 <- siteFMGsum[order(siteFMGsum$BlindedGenre2, decreasing=T)[1:20], c(1,3), drop=F]
-top20s3 <- siteFMGsum[order(siteFMGsum$BlindedGenre3, decreasing=T)[1:20], c(1,4), drop=F]
-top20s4 <- siteFMGsum[order(siteFMGsum$BlindedGenre4, decreasing=T)[1:20], c(1,5), drop=F]
-top20s5 <- siteFMGsum[order(siteFMGsum$BlindedGenre5, decreasing=T)[1:20], c(1,6), drop=F]
-
-meltCountryDF <- melt(impTrain, id.vars=c("FavoriteMovieGenre", "country"), measure.vars=NULL)
-countryFMGsum <- dcast(meltCountryDF, country ~ FavoriteMovieGenre)
-
-top20c1 <- countryFMGsum[order(countryFMGsum$BlindedGenre1, decreasing=T)[1:20], c(1,2), drop=F]
-top20c2 <- countryFMGsum[order(countryFMGsum$BlindedGenre2, decreasing=T)[1:20], c(1,3), drop=F]
-top20c3 <- countryFMGsum[order(countryFMGsum$BlindedGenre3, decreasing=T)[1:20], c(1,4), drop=F]
-top20c4 <- countryFMGsum[order(countryFMGsum$BlindedGenre4, decreasing=T)[1:20], c(1,5), drop=F]
-top20c5 <- countryFMGsum[order(countryFMGsum$BlindedGenre5, decreasing=T)[1:20], c(1,6), drop=F]
