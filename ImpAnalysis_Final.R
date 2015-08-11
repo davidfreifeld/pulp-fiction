@@ -36,14 +36,16 @@ impData$logfileid <- NULL
 
 # do some work on the site strings
 impData$site <- as.character(impData$site)
-#impData$site <- sub(".*\\.(.*\\..*)$", "\\1", impData$site)
 impData$site <- sub("^www\\.(.*)", "\\1", impData$site)
 impData$site[grepl(".*\\.site-not-provided", impData$site)] <- NA
 
+# now append the site data to our dataset
 impData <- merge(x = impData, y = siteData, by.x = 'site', by.y = 'URL', all.x = T)
 
 threshold <- 0.9
 
+# classify each site only if the probability that it is that category is
+# greater than the "threshold"
 impData$sitecategory <- "Unclassified"
 maxSiteScores <- apply(impData[14:23],1,max)
 impData$sitecategory[!is.na(maxSiteScores) & maxSiteScores > threshold] <- 
@@ -124,7 +126,6 @@ impData$usregion[!is.na(impData$usa) & !impData$usa] <- "International"
 impData$usregion <- factor(impData$usregion)
 
 
-
 #~~~~~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~~~~~#
 
 userSiteCounts <- ddply(impData[impData$FavoriteMovieGenre != "?????",],
@@ -188,10 +189,6 @@ ggplot(impData[impData$FavoriteMovieGenre != "?????",],
     aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
         geom_bar(stat="bin") + 
         facet_wrap(~ sitecluster)
-
-
-
-
 
 
 #~~~~~~~~~~~~~~~~ GET SUMMARY DFs ~~~~~~~~~~~~~~~~#
@@ -276,10 +273,6 @@ rownames(userSiteClusterSummary) <- names(userSplits)
 userData <- cbind(userData, userSiteClusterSummary)
 
 
-
-
-
-
 # split the data into those where we know the genre 
 # and those where we do not
 
@@ -298,7 +291,7 @@ userUnknown$FavoriteMovieGenre <- NULL
 userData$FavoriteMovieGenre <- factor(userData$FavoriteMovieGenre)
 
 
-#~~~~~~~~~~~~~~~MORE EXPLORATORY~~~~~~~~~~~~~~~~#
+#~~~~~~~~~~~~~~~MORE EXPLORATORY ANALYSIS~~~~~~~~~~~~~~~~#
 
 ggplot(userKnown[!userKnown$usa,], aes(x = FavoriteMovieGenre, 
     fill = FavoriteMovieGenre)) + 
@@ -306,28 +299,9 @@ ggplot(userKnown[!userKnown$usa,], aes(x = FavoriteMovieGenre,
         facet_wrap(~ country)
 
 
-
-
-
-
-
 #~~~~~~~~~~~~~~~~ MODEL BUILDING ~~~~~~~~~~~~~~~~#
 
-features <- c("FavoriteMovieGenre", "usregion", "devicetype", "SundayMorn", "SundayAft", 
-    "SundayEve", "SundayLate", "WeekdayMorn", "WeekdayAft", "WeekdayEve", "WeekdayLate",
-    "SaturdayMorn", "SaturdayAft", "SaturdayEve", "SaturdayLate", siteClusterCols)
-
 userKnown$tdid <- as.character(userKnown$tdid)
-# split <- sample.split(userKnown$FavoriteMovieGenre, SplitRatio = 0.7)
-# userTrain <- subset(userKnown,  split)
-# userVal <- subset(userKnown, !split)
-# userTrain$tdid <- as.factor(userTrain$tdid)
-# userVal$tdid <- as.factor(userVal$tdid)
-
-# rfUserKnown <- userKnown[features]
-# rfMod <- train(FavoriteMovieGenre ~ ., data = rfUserKnown, 
-#     method='rf', trControl = trainControl(method = "cv"))
-# rfMod
 
 numFolds = trainControl( method = "cv", number = 10 )
 cpGrid = expand.grid( .cp = seq(0.0001,0.03,0.005)) 
@@ -342,25 +316,7 @@ userUnknown$devicetypeTablet <- as.numeric(as.character(userUnknown$devicetype) 
 treePred <- predict(treeMod$finalModel, newdata=userUnknown)
 
 treePred <- as.data.frame(predict(treeMod$finalModel, newdata=userUnknown, type="class"))
-write.csv(treePred, "genrePredictions.csv")
-
-# daisyUser <- daisy(userKnown[c(3,8:20)])
-# pamUser <- pam(daisyUser, k = 10)
-
-# userKnown$usercluster <- sapply(as.character(userKnown$tdid), 
-#     function(x) {
-#         pamUser$clustering[[x]]
-#     }
-# )
-# userKnown$usercluster <- factor(userKnown$usercluster)
-# ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
-#     geom_bar(stat="bin") + 
-#     facet_grid(~usercluster)
-
-
-
-possibleUserPairs <- merge(x = userKnown, y = userKnown, 
-    by = c("FavoriteMovieGenre", "devicetype"), all = T)[,c("tdid.x", "tdid.y")]
+write.csv(treePred, "userGenrePredictions.csv")
 
 
 #~~~~~~~~~~~~~~~~ FINDING FRIENDS ~~~~~~~~~~~~~~~~#
@@ -401,35 +357,3 @@ for (tdidi in rownames(userOverlapMat)) {
             userKnown[userKnown$tdid == tdidi, "numSites"]
     }
 }
-
-#~~~~~~~~~~~~~~~~ MAKE GRAPHS ~~~~~~~~~~~~~~~~#
-
-reshapePeriodUser <- melt(userKnown, id.vars=c('tdid', 'FavoriteMovieGenre'),
-    measure.vars=c("SundayMorn", "SundayAft", "SundayEve", "SundayLate", 
-                    "WeekdayMorn", "WeekdayAft", "WeekdayEve", "WeekdayLate",
-                    "SaturdayMorn", "SaturdayAft", "SaturdayEve", "SaturdayLate"))
-summaryPeriodUser <- ddply(reshapePeriodUser, .(FavoriteMovieGenre), summarize,
-    FavoriteMovieGenre = FavoriteMovieGenre[1],
-    SundayMorn = mean(value[variable == "SundayMorn"], na.rm=T),
-    SundayAft = mean(value[variable == "SundayAft"], na.rm=T),
-    SundayEve = mean(value[variable == "SundayEve"], na.rm=T),
-    SundayLate = mean(value[variable == "SundayLate"], na.rm=T),
-    WeekdayMorn = mean(value[variable == "WeekdayMorn"], na.rm=T),
-    WeekdayAft = mean(value[variable == "WeekdayAft"], na.rm=T),
-    WeekdayEve = mean(value[variable == "WeekdayEve"], na.rm=T),
-    WeekdayLate = mean(value[variable == "WeekdayLate"], na.rm=T),
-    SaturdayMorn = mean(value[variable == "SaturdayMorn"], na.rm=T),
-    SaturdayAft = mean(value[variable == "SaturdayAft"], na.rm=T),
-    SaturdayEve = mean(value[variable == "SaturdayEve"], na.rm=T),
-    SaturdayLate = mean(value[variable == "SaturdayLate"], na.rm=T)
-)
-
-reshapeSummaryPeriodUser <- melt(summaryPeriodUser, id.vars=c('FavoriteMovieGenre'),
-    measure.vars=c("SundayMorn", "SundayAft", "SundayEve", "SundayLate", 
-                    "WeekdayMorn", "WeekdayAft", "WeekdayEve", "WeekdayLate",
-                    "SaturdayMorn", "SaturdayAft", "SaturdayEve", "SaturdayLate"))
-
-ggplot(reshapeSummaryPeriodUser, aes(x = FavoriteMovieGenre, y = value, fill = variable)) +
-    geom_bar(stat="identity", position=position_dodge())
-
-
