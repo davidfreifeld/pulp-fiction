@@ -1,0 +1,717 @@
+---
+title: "Movie Genre Analysis"
+author: "David Freifeld"
+highlighter: highlight.js
+output: pdf_document
+job: null
+knit: slidify::knit2slides
+mode: selfcontained
+hitheme: tomorrow
+subtitle: Using Web History Data
+framework: io2012
+widgets: []
+---
+
+## Getting and Cleaning Data
+
+```{r warning=FALSE, include=FALSE}
+library(ggplot2)
+library(caTools)
+library(reshape2)
+library(plyr)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(e1071)
+library(datasets)
+library(cluster)
+library(caret)
+
+setwd("C:/Users/David/workspace/Final Project/")
+```
+
+- Read in the data file and examine its contents
+
+```{r}
+impData <- read.table("ImpData.txt", header=T, sep='\t', 
+        na.strings='(null)', quote="")
+nrow(impData)
+colnames(impData)
+```
+
+```{r include=FALSE}
+# format some of the variables to dates and factors
+impData$logentrytime <- as.POSIXct(impData$logentrytime,
+        format='%m/%d/%Y %H:%M', tz = "GMT")
+impData$metro <- factor(impData$metro)
+impData$logfileid <- NULL
+```
+
+---
+
+## Format/Consolidate URL's
+
+```{r}
+length(levels(impData$site))
+```
+
+- Remove the leading "www" and mark "site-not-provided" sites as NA.
+
+```{r}
+impData$site <- as.character(impData$site)
+impData$site <- sub("^www\\.(.*)", "\\1", impData$site)
+impData$site[grepl(".*\\.site-not-provided", impData$site)] <- NA
+impData$site <- factor(impData$site)
+length(levels(impData$site))
+```
+
+```{r include = FALSE}
+impData$site <- as.character(impData$site)
+```
+
+- Removed about 1,000 unique URL's. 
+
+---
+
+## Site Classification
+
+- Used natural language processing tool from uclassify.com to categorize all of the URL's in the dataset.
+- Excerpt of Python code used below (entire file can be found on Github):
+
+```{python}
+def getSiteClassificationData(apiKey, classifierName, url):
+    requestURL = "http://uclassify.com/browse/uClassify/Topics/ClassifyUrl?readkey=" + \
+        apiKey + "&url=" + url + "&version=1.01"
+    try:
+        myFile = urllib2.urlopen(requestURL)
+        data = myFile.read()
+        myFile.close()
+        dataDict = xmltodict.parse(data)
+        return dataDict
+    except urllib2.HTTPError:
+        print "Error for url " + url
+        return {}
+```
+
+---
+
+## Site Classification
+
+uclassify.com's API returns a probability for each of ten categories based on the text on the page provided:
+
+```{r}
+siteData <- read.csv('categories.csv', stringsAsFactors=F)
+colnames(siteData)
+knitr::kable(siteData[1:4,1:5])
+```
+
+---
+
+## Site Classification
+
+Determine the category of each URL, but only if uclassify is confident above some threshold that the site falls into that category.
+
+
+```{r}
+# Merge the two data sets using the site/URL as the key
+impData <- merge(x = impData, y = siteData, by.x = 'site', by.y = 'URL', all.x = T)
+
+impData$sitecategory <- "Unclassified"
+maxSiteScores <- apply(impData[14:23],1,max)
+
+# Determine the category, only if the confidence is above 90%
+threshold <- 0.9
+impData$sitecategory[!is.na(maxSiteScores) & maxSiteScores > threshold] <- 
+    colnames(impData[14:23])[
+        apply(impData[!is.na(maxSiteScores) & maxSiteScores > threshold, 
+            c(14:23)], 1, which.max)]
+```
+
+```{r include=FALSE}
+impData$sitecategory <- factor(impData$sitecategory)
+impData$site <- factor(impData$site)
+```
+
+---
+
+## Transforming Timestamp Data
+
+```{r}
+bHourNA <- is.na(impData$userHourOfWeek)
+
+# Get the hour of the day (0-23) by taking mod 24
+impData$userHourOfDay <- impData$userHourOfWeek %% 24
+
+# The hours of 12AM to 4AM are really "late night" the previous day
+weeHours <- impData$userHourOfDay < 5 & !bHourNA
+normHours <- impData$userHourOfDay >= 5 & !bHourNA
+
+# Shift the hours of the day and day of the week to account for this
+impData$userHourOfDay[weeHours] <- impData$userHourOfDay[weeHours] + 19
+impData$userHourOfDay[normHours] <- impData$userHourOfDay[normHours] - 5
+
+impData$userDayOfWeek <- impData$userHourOfWeek %/% 24
+impData$userDayOfWeek[weeHours] <- impData$userDayOfWeek[weeHours] - 1
+impData$userDayOfWeek[impData$userDayOfWeek == -1] <- 6
+```
+
+---
+
+## Transforming Timestamp Data
+
+```{r echo=FALSE, fig.width=12, fig.align='center'}
+ggplot(impData[impData$FavoriteMovieGenre != "?????",], aes(x=userHourOfDay)) + 
+    geom_bar(stat="bin", binwidth=1, fill="yellow", color="black") + 
+    facet_grid(~ FavoriteMovieGenre) + 
+    ggtitle("Number of Impressions Per Hour of Day by Favorite Movie Genre") + 
+    scale_x_continuous(breaks=c(1,7,13,19), labels= c(6, 12,18,24)) + 
+    xlab("Hour of Day") + 
+    ylab("Number of Impressions")
+```
+
+---
+
+## Transforming Timestamp Data
+
+```{r echo=FALSE}
+impData$userPeriodOfWeek <- impData$userHourOfDay
+bSunday <- impData$userDayOfWeek == 0 & !bHourNA
+bWeekday <- impData$userDayOfWeek > 0 & impData$userDayOfWeek < 6 & !bHourNA
+bSaturday <- impData$userDayOfWeek == 6 & !bHourNA
+bSundayMorn <- bSunday & impData$userHourOfDay >= 0 & impData$userHourOfDay <= 5 & !bHourNA
+bSundayAft <- bSunday & impData$userHourOfDay >= 6 & impData$userHourOfDay <= 11 & !bHourNA
+bSundayEve <- bSunday & impData$userHourOfDay >= 12 & impData$userHourOfDay <= 17 & !bHourNA
+bSundayLate <- bSunday & impData$userHourOfDay >= 18 & impData$userHourOfDay <= 23 & !bHourNA
+bWeekdayMorn <- bWeekday & impData$userHourOfDay >= 0 & impData$userHourOfDay <= 5 & !bHourNA
+bWeekdayAft <- bWeekday & impData$userHourOfDay >= 6 & impData$userHourOfDay <= 11 & !bHourNA
+bWeekdayEve <- bWeekday & impData$userHourOfDay >= 12 & impData$userHourOfDay <= 17 & !bHourNA
+bWeekdayLate <- bWeekday & impData$userHourOfDay >= 18 & impData$userHourOfDay <= 23 & !bHourNA
+bSaturdayMorn <- bSaturday & impData$userHourOfDay >= 0 & impData$userHourOfDay <= 5 & !bHourNA
+bSaturdayAft <- bSaturday & impData$userHourOfDay >= 6 & impData$userHourOfDay <= 11 & !bHourNA
+bSaturdayEve <- bSaturday & impData$userHourOfDay >= 12 & impData$userHourOfDay <= 17 & !bHourNA
+bSaturdayLate <- bSaturday & impData$userHourOfDay >= 18 & impData$userHourOfDay <= 23 & !bHourNA
+
+impData$userPeriodOfWeek[bSundayMorn] <- 0
+impData$userPeriodOfWeek[bSundayAft] <- 1
+impData$userPeriodOfWeek[bSundayEve] <- 2
+impData$userPeriodOfWeek[bSundayLate] <- 3
+impData$userPeriodOfWeek[bWeekdayMorn] <- 4
+impData$userPeriodOfWeek[bWeekdayAft] <- 5
+impData$userPeriodOfWeek[bWeekdayEve] <- 6
+impData$userPeriodOfWeek[bWeekdayLate] <- 7
+impData$userPeriodOfWeek[bSaturdayMorn] <- 8
+impData$userPeriodOfWeek[bSaturdayAft] <- 9
+impData$userPeriodOfWeek[bSaturdayEve] <- 10
+impData$userPeriodOfWeek[bSaturdayLate] <- 11
+```
+
+
+```{r}
+impData$userPeriodOfWeek <- factor(impData$userPeriodOfWeek, labels = c("SundayMorn",
+                                 "SundayAft", "SundayEve", "SundayLate", "WeekdayMorn",
+                                 "WeekdayAft", "WeekdayEve", "WeekdayLate",
+                                 "SaturdayMorn", "SaturdayAft", "SaturdayEve", 
+                                 "SaturdayLate"))
+impData$userDayOfWeek <- factor(impData$userDayOfWeek, labels = c("Sunday", 
+                                 "Monday", "Tuesday", "Wednesday", "Thursday", 
+                                 "Friday", "Saturday"))
+```
+
+---
+
+## United States Regions
+
+```{r include=FALSE}
+impData$browser <- as.character(impData$browser)
+impData$browser <- sub("InternetExplorer.*", "InternetExplorer", impData$browser)
+impData$browser <- factor(impData$browser)
+
+impData$english <- as.character(impData$country) %in%
+        c("United States", "United Kingdom", "Canada", "Ireland", 
+            "Australia", "New Zealand") 
+```
+
+- Use state data to map the impression to one of the four US Regions
+
+```{r}
+impData$usa <- as.character(impData$country) == "United States"
+
+data(state)
+impData$usregion <- sapply(as.character(impData$region), function(x) 
+    as.character(state.region[pmatch(x, state.name)]))
+
+impData$usregion[impData$region == "District of Columbia"] <- "Northeast"
+impData$usregion[!is.na(impData$usa) & !impData$usa] <- "International"
+impData$usregion <- factor(impData$usregion)
+```
+
+---
+
+## United States Regions
+
+```{r echo=FALSE, fig.align='center'}
+ggplot(impData, aes(x = usregion, fill = usregion)) + 
+    geom_bar(stat="bin") + 
+    ggtitle("Number of Impressions per US Region") + 
+    theme(axis.ticks = element_blank(), axis.text.x = element_blank()) + 
+    xlab("Region") + 
+    ylab("Number of Impressions")
+```
+
+---
+
+## Summarizing the Impressions Per User
+
+- Accomplished using the plyr package in R
+- Most features are constant per user across impressions (country, os, etc.)
+- Time and website url are the two features that vary greatly across impressions
+
+
+```{r}
+
+# we'll use this function to summarize data by user
+Mode <<- function(x) {
+    xtable <- table(x)
+    if (sum(xtable))
+        return(names(which.max(table(x))))
+    else 
+        return(NA)
+}
+
+userData <- ddply(impData, .(tdid), summarize,
+    country = Mode(country),
+    region = Mode(region),
+    metro = Mode(metro),
+    city = Mode(city),
+    devicetype = Mode(devicetype),
+    osfamily = Mode(osfamily),
+    os = Mode(os),
+    browser = Mode(browser),
+    FavoriteMovieGenre = Mode(FavoriteMovieGenre),
+    usregion = Mode(usregion),
+    usa = sum(usa, na.rm=T) / sum(!is.na(usa)) > 0.5,
+    SundayMorn = sum(userPeriodOfWeek == "SundayMorn", na.rm=T)/sum(!is.na(userPeriodOfWeek)),
+    SundayAft = sum(userPeriodOfWeek == "SundayAft", na.rm=T)/sum(!is.na(userPeriodOfWeek)),
+    SundayEve = sum(userPeriodOfWeek == "SundayEve", na.rm=T)/sum(!is.na(userPeriodOfWeek)),
+    SundayLate = sum(userPeriodOfWeek == "SundayLate", na.rm=T)/sum(!is.na(userPeriodOfWeek)),
+    WeekdayMorn = sum(userPeriodOfWeek == "WeekdayMorn", na.rm=T)/sum(!is.na(userPeriodOfWeek))/5,
+    WeekdayAft = sum(userPeriodOfWeek == "WeekdayAft", na.rm=T)/sum(!is.na(userPeriodOfWeek))/5,
+    WeekdayEve = sum(userPeriodOfWeek == "WeekdayEve", na.rm=T)/sum(!is.na(userPeriodOfWeek))/5,
+    WeekdayLate = sum(userPeriodOfWeek == "WeekdayLate", na.rm=T)/sum(!is.na(userPeriodOfWeek))/5,
+    SaturdayMorn = sum(userPeriodOfWeek == "SaturdayMorn", na.rm=T)/sum(!is.na(userPeriodOfWeek)),
+    SaturdayAft = sum(userPeriodOfWeek == "SaturdayAft", na.rm=T)/sum(!is.na(userPeriodOfWeek)),
+    SaturdayEve = sum(userPeriodOfWeek == "SaturdayEve", na.rm=T)/sum(!is.na(userPeriodOfWeek)),
+    SaturdayLate = sum(userPeriodOfWeek == "SaturdayLate", na.rm=T)/sum(!is.na(userPeriodOfWeek)),
+    bArts = "Arts" %in% sitecategory,
+    bBusiness = "Business" %in% sitecategory,
+    bScience = "Science" %in% sitecategory,
+    bComputers = "Computers" %in% sitecategory,
+    bRecreation = "Recreation" %in% sitecategory,
+    bSports = "Sports" %in% sitecategory,
+    bSociety = "Society" %in% sitecategory,
+    bHealth = "Health" %in% sitecategory,
+    bHome = "Home" %in% sitecategory,
+    bGames = "Games" %in% sitecategory
+)
+rownames(userData) <- userData$tdid
+userData[2:11] <- as.data.frame(lapply(userData[2:11], factor))
+
+userData$usregion[userData$usa == "TRUE" & is.na(userData$usregion)] <- "South"
+
+# impute the medians for the periodOfWeek vars
+userData <- transform(userData, 
+    SundayMorn = ifelse(is.na(SundayMorn), median(SundayMorn, na.rm=TRUE), SundayMorn),
+    SundayAft = ifelse(is.na(SundayAft), median(SundayAft, na.rm=TRUE), SundayAft),
+    SundayEve = ifelse(is.na(SundayEve), median(SundayEve, na.rm=TRUE), SundayEve),
+    SundayLate = ifelse(is.na(SundayLate), median(SundayLate, na.rm=TRUE), SundayLate),
+    WeekdayMorn = ifelse(is.na(WeekdayMorn), median(WeekdayMorn, na.rm=TRUE), WeekdayMorn),
+    WeekdayAft = ifelse(is.na(WeekdayAft), median(WeekdayAft, na.rm=TRUE), WeekdayAft),
+    WeekdayEve = ifelse(is.na(WeekdayEve), median(WeekdayEve, na.rm=TRUE), WeekdayEve),
+    WeekdayLate = ifelse(is.na(WeekdayLate), median(WeekdayLate, na.rm=TRUE), WeekdayLate),
+    SaturdayMorn = ifelse(is.na(SaturdayMorn), median(SaturdayMorn, na.rm=TRUE), SaturdayMorn),
+    SaturdayAft = ifelse(is.na(SaturdayAft), median(SaturdayAft, na.rm=TRUE), SaturdayAft),
+    SaturdayEve = ifelse(is.na(SaturdayEve), median(SaturdayEve, na.rm=TRUE), SaturdayEve),
+    SaturdayLate = ifelse(is.na(SaturdayLate), median(SaturdayLate, na.rm=TRUE), SaturdayLate)
+)
+```
+
+---
+
+## Summarize Sites by Favorite Movie Genre
+
+```{r}
+userSiteCounts <- ddply(impData[impData$FavoriteMovieGenre != "?????",],
+    .(tdid, site), summarize, count = length(FavoriteMovieGenre),
+    FavoriteMovieGenre = FavoriteMovieGenre[1])
+
+siteGenreCounts <- ddply(userSiteCounts, .(site, FavoriteMovieGenre),
+    summarize, count = length(count))
+```
+
+---
+
+## Split Data by Whether Genre is Known/Unknown
+
+```{r}
+userData$FavoriteMovieGenre <- as.character(userData$FavoriteMovieGenre)
+userData$tdid <- as.character(userData$tdid)
+
+userKnown <- subset(userData, FavoriteMovieGenre != "?????")
+userKnown$FavoriteMovieGenre <- factor(userKnown$FavoriteMovieGenre)
+userKnown$tdid <- factor(userKnown$tdid)
+
+userUnknown <- subset(userData, FavoriteMovieGenre == "?????")
+userUnknown$FavoriteMovieGenre <- NULL
+userUnknown$tdid <- factor(userUnknown$tdid)
+
+userData$tdid <- factor(userData$tdid)
+userData$FavoriteMovieGenre <- factor(userData$FavoriteMovieGenre)
+```
+
+---
+
+## Exploratory Analysis
+
+```{r echo=FALSE, fig.width=10, fig.align='center'}
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+    geom_bar(stat="bin") + 
+    facet_grid(~ devicetype) + 
+    ggtitle("Favorite Movie Genre by Device Type") + 
+    ylab("Number of Users") + 
+    xlab("Device Type") + 
+    theme(axis.ticks = element_blank(), axis.text.x = element_blank())
+    
+```
+
+---
+
+## Exploratory Analysis
+
+```{r echo=FALSE, fig.width=8, fig.align='center'}
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+        geom_bar(stat="bin") + 
+        facet_wrap(~ usa) + 
+        theme(axis.ticks = element_blank(), axis.text.x = element_blank()) +
+        ggtitle("Favorite Movie Genres for the US vs Everyone Else") + 
+        xlab("") + 
+        ylab("Number of Users")
+```
+
+---
+
+## Exploratory Analysis
+
+```{r echo=FALSE, fig.width=13, fig.align='center'}
+ggplot(userKnown[!userKnown$usa,], aes(x = FavoriteMovieGenre, 
+    fill = FavoriteMovieGenre)) + 
+        geom_bar(stat="bin") + 
+        facet_wrap(~ country) + 
+        theme(axis.ticks = element_blank(), axis.text.x = element_blank()) +
+        ggtitle("Favorite Movie Genres by Non-US Countries") + 
+        xlab("") + 
+        ylab("Number of Users")
+```
+
+---
+
+## Blinded Genre Guesses
+
+1. Action/Adventure
+2. Animated Movies
+3. Comedy
+4. Drama
+5. Documentaries
+
+---
+
+## BlindedGenre1: Action/Adventure
+- Most popular favorite genre in the United States
+- Not nearly as popular in other countries
+- If a user has visited a 'Home' site, much less likely to like BlindedGenre1:
+
+```{r echo=FALSE, fig.height=4, fig.width=8, fig.align='center'}
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+    geom_bar(stat="bin") + 
+    facet_grid(~ bHome) + 
+    ggtitle("Genre vs Visit to a 'Home' Site?") + 
+    theme(axis.ticks = element_blank(), axis.text.x = element_blank()) +
+    xlab("") + 
+    ylab("Number of Users")
+```
+
+---
+
+## BlindedGenre2: Animated Movies
+- Thesis: BlindedGenre2 is likely Animated Movies because it includes both children and parents.
+- Children
+  * Spike at 3pm - children arriving home from school
+  * Much higher likelihood that a genre 2 user was using a mobile or tablet device
+- Parents:
+  
+```{r}
+bg2 <- siteGenreCounts[!is.na(siteGenreCounts$site) & siteGenreCounts$FavoriteMovieGenre == "BlindedGenre2",]
+head(as.character(bg2[order(bg2$count, decreasing=T),"site"]), n = 20)
+```
+
+---
+
+## BlindedGenre3: Comedy
+- Most popular genre in the non-US countries
+  * Especially France (all but one French user chose BlindedGenre3)
+- Spikes at both 9AM and 3pm
+  * A genre appreciated by both children and adults
+  
+```{r echo=FALSE, fig.height=5, fig.width=8, fig.align='center'}
+ggplot(userKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+    geom_bar(stat="bin") + 
+    facet_grid(~ bGames) + 
+    ggtitle("Genre vs Visit to a 'Games' Site?") + 
+    theme(axis.ticks = element_blank(), axis.text.x = element_blank()) +
+    xlab("") + 
+    ylab("Number of Users")
+    
+```
+
+---
+
+## BlindedGenre4: Drama
+
+- Slightly more popular in the South, and among users who visited foxnews.com
+  * More conservative users might prefer a drama versus comedy, animated, action/adventure etc.
+- Fourth most popular genre among US users
+  * Process of elimination
+
+---
+  
+## BlindedGenre5: Documentaries
+- Spike at 9AM - Adults leaving for work
+- Top sites include technology-related/"nerdy" sites such as "phandroid.com," "phonearena.com," "bbc.com," "howtogeek.com"
+- Second guess would be Sci-Fi
+
+```{r}
+bg5 <- siteGenreCounts[!is.na(siteGenreCounts$site) & siteGenreCounts$FavoriteMovieGenre == "BlindedGenre5",]
+head(as.character(bg5[order(bg5$count, decreasing=T),"site"]), n = 24)
+```
+
+---
+
+## Clustering Web Sites by User Overlap
+
+```{r}
+siteOverlapMat <- as.matrix(read.csv('siteOverlapMat.csv', row.names=1))
+colnames(siteOverlapMat) <- rownames(siteOverlapMat)
+
+maxOverlap <- max(siteOverlapMat) + 1
+siteDistMat <- (maxOverlap - siteOverlapMat)^2
+siteDist <- as.dist(siteDistMat)
+
+# Set this to get number of clusters
+k = 10
+pamSite <- pam(siteDist, k)
+
+# append the clusters to the data set
+impData$sitecluster <- factor(sapply(as.character(impData$site), function(x) {
+    if (is.na(x)) NA
+    else          pamSite$clustering[[x]] }))
+```
+
+---
+
+## Clustering Web Sites by User Overlap
+
+```{r include=FALSE}
+
+siteClusterCols <- paste0('sitecluster', 1:k)
+impData[,siteClusterCols] <- NA
+
+impData[!is.na(impData$sitecluster),siteClusterCols] <- 
+    model.matrix(FavoriteMovieGenre ~ sitecluster - 1, impData)
+```
+
+```{r echo=FALSE, fig.width=10, fig.align='center'}
+ggplot(impData[impData$FavoriteMovieGenre != "?????",], 
+    aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) +
+        geom_bar(stat="bin") + facet_wrap(~ sitecluster) + 
+        theme(axis.ticks = element_blank(), axis.text.x = element_blank()) +
+        ylab("Number of Impressions") + 
+        ggtitle("Number of Impressions per Favorite Genre by Cluster") + 
+        xlab("")
+```
+
+```{r include=FALSE}
+# Get the summary statistics for the site clusters and bind to
+# the userData summary df
+siteClusterTable <- table(impData$sitecluster) / sum(!is.na(impData$sitecluster))
+userSplits <- split(impData[siteClusterCols], impData$tdid)
+
+userSiteClusterList <- lapply(names(userSplits), function(id) {
+    DF <- userSplits[[id]]
+    summaryDF <- data.frame(row.names = id)
+    numRows <- sum(!is.na(DF[1]))
+    for (i in 1:length(siteClusterCols)){
+        c <- siteClusterCols[i]
+        summaryDF[id, c] <- (sum(DF[c], na.rm=T) + 5 * siteClusterTable[[i]]) /
+                                (numRows + 5)
+    }
+    summaryDF
+})
+
+userSiteClusterSummary <- ldply(userSiteClusterList)
+rownames(userSiteClusterSummary) <- names(userSplits)
+
+userData <- cbind(userData, userSiteClusterSummary)
+```
+
+---
+
+## Building a Predictive Model
+
+- Model had to fit _users_, not impressions
+- Cross-validated a classification tree model 
+- Chose from all of the summary variables
+- Best model only uses two variables: is the user in the US, and is she on a PC
+- Out of sample accuracy is about 45%
+
+```{r eval=FALSE}
+numFolds = trainControl( method = "cv", number = 10 )
+
+# the range of complexity parameters to try
+cpGrid = expand.grid( .cp = seq(0.001,0.026,0.005)) 
+
+# train the model using cross-validation
+treeMod <- train(FavoriteMovieGenre ~ ., data = userKnown,
+    method='rpart', trControl = numFolds, tuneGrid = cpGrid)
+```
+
+```{r echo=FALSE}
+numFolds = trainControl( method = "cv", number = 10 )
+cpGrid = expand.grid( .cp = seq(0.001,0.03,0.005)) 
+treeMod <- train(FavoriteMovieGenre ~ usa + devicetype, data = userKnown,
+    method='rpart', trControl = numFolds, tuneGrid = cpGrid)
+```
+
+---
+
+## Building a Predictive Model
+
+```{r fig.height=8, fig.width=10}
+prp(treeMod$finalModel, varlen=0)
+```
+
+---
+
+## How Could the Model Be Improved?
+
+- More data 
+  * Currently, the best model for prediction is a high bias (i.e. underfit) model
+  * The reason that a high variance (i.e. overfit) model cannot work is that there is not enough data
+  * More data could lead to a more complicated tree that can still predict well
+- A better algorithm for classifying websites
+
+---
+
+## Finding Best Friends
+
+- Required
+  * same Favorite Movie Genre
+  * speak the same language
+- Main metric
+  * high number of overlapping visited sites
+  * also high __proportion__ of overlapping visited sites
+
+---
+
+## Finding Best Friends
+
+```{r}
+
+userSiteGenreKnown <- na.omit(ddply(impData[impData$FavoriteMovieGenre != "?????",],
+    .(tdid, site), summarize, FavoriteMovieGenre = FavoriteMovieGenre[1]))
+```
+
+```{r include=FALSE}
+userSiteGenreKnown$tdid <- factor(as.character(userSiteGenreKnown$tdid))
+userSiteGenreKnown$site <- factor(as.character(userSiteGenreKnown$site))
+```
+
+```{r}
+mergedUserSite <- merge(x=userSiteGenreKnown, y=userSiteGenreKnown, by=c("site", "FavoriteMovieGenre"), all = T)
+mergedUserSite <- mergedUserSite[mergedUserSite$tdid.x != mergedUserSite$tdid.y,]
+```
+
+```{r include=FALSE}
+mergedUserSite$tdid.x <- factor(as.character(mergedUserSite$tdid.x))
+mergedUserSite$tdid.y <- factor(as.character(mergedUserSite$tdid.y))
+mergedUserSite$site <- factor(as.character(mergedUserSite$site))
+```
+
+```{r}
+userSplits <- split(as.character(mergedUserSite$tdid.x), mergedUserSite$tdid.y)
+numUsers <- length(userSplits)
+userOverlapMat <- matrix(rep(0, numUsers*numUsers), nrow = numUsers, 
+                         dimnames = list(names(userSplits), names(userSplits)))
+for (tdidi in names(userSplits)) {
+    for (tdidj in as.character(userSplits[[tdidi]])) {
+        if (!is.na(tdidj))
+            userOverlapMat[tdidi, tdidj] = userOverlapMat[tdidi, tdidj] + 1
+    }
+}
+userOverlapMat[upper.tri(userOverlapMat)] <- 0
+
+```
+
+---
+
+## Finding Best Friends
+
+```{r}
+max(userOverlapMat)
+which(userOverlapMat == max(userOverlapMat), arr.ind=T)
+length(unique(impData$site[impData$tdid == colnames(userOverlapMat)[708]]))
+
+```
+
+---
+
+## Finding Best Friends
+
+```{r}
+tail(sort(userOverlapMat), n = 40)
+which(userOverlapMat == 13, arr.ind=T)
+c(length(unique(impData$site[impData$tdid == colnames(userOverlapMat)[1003]])),
+    length(unique(impData$site[impData$tdid == colnames(userOverlapMat)[707]])))
+```
+
+---
+
+## Finding Best Friends
+
+Second-best guess for potential best friends:
+
+```{r}
+userOverlapMat["a469f9c5-616c-4a65-90db-476813e49cd5", "2101ae87-c55f-432b-bda8-10641d74bef7"]
+length(unique(impData$site[impData$tdid == "2101ae87-c55f-432b-bda8-10641d74bef7"]))
+length(unique(impData$site[impData$tdid == "a469f9c5-616c-4a65-90db-476813e49cd5"]))
+```
+
+---
+
+## Finding Best Friends
+
+Confidence
+
+```{r}
+# Number of elements in the lower diagonal of the matrix:
+nrow(userOverlapMat) * (nrow(userOverlapMat)-1) / 2
+```
+
+- The users chosen have the 3rd highest number of overlapping sites (13), and are in the 99.9th percentile
+- The pair is also in the 99.7th percentile for proportion of sites overlapping
+- Because of many other factors that I have not quantified, I am only 75% confident that these users will be friends
+- It is slightly lower for the second pair due to the smaller sample sizes. 65% confident.
+
+---
+
+## Thank you!
+
+

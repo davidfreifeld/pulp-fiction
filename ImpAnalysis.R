@@ -125,9 +125,6 @@ impUnknown$tdid <- factor(impUnknown$tdid)
 
 impData$tdid <- factor(impData$tdid)
 
-
-#~~~~~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~~~~~#
-
 # we'll use this function to summarize data by user
 Mode <- function(x) {
     xtable <- table(x)
@@ -138,8 +135,43 @@ Mode <- function(x) {
         NA
 }
 
+
+#~~~~~~~~~~~~~~~~ SITE CLUSTERING ATTEMPTS ~~~~~~~~~~~~~~~~#
+
+dissimilarityData <- ddply(impData, .(tdid), summarize, 
+    country = length(unique(country)),
+    site = length(unique(site)),
+    region = length(unique(region)),
+    devicetype = length(unique(devicetype)),
+    osfamily = length(unique(osfamily)),
+    browser = length(unique(browser)),
+    usregion = length(unique(usregion)),
+    english = length(unique(usregion)),
+    userPeriodOfWeek = length(unique(userPeriodOfWeek))
+)
+
+
+
+# HERE WE GO AGAIN ON MY OWN
+# numSites <- length(levels(impData$site))
+# numUsers <- length(levels(impData$tdid))
+# userSiteCounts <- matrix(rep(0, numUsers*numSites), nrow = numUsers, 
+#     dimnames = list(levels(impData$tdid), levels(impData$site)))
+# userSiteSplits <- split(impData$site, impData$tdid)
+
+# for (iUser in 1:length(userSiteSplits)) {
+#     user <- names(userSiteSplits)[iUser]
+#     for(site in as.character(userSiteSplits[[iUser]])) {
+#         if (!is.na(site)) {
+#             userSiteCounts[user, site] = userSiteCounts[user, site] + 1
+#         }
+#     }
+# }
+
+
+
 # Try to get a matrix of distances between sites
-userSite <- na.omit(ddply(impData, .(site, tdid), summarize, 
+userSiteGenreData <- na.omit(ddply(impData, .(tdid, site), summarize,
     FavoriteMovieGenre = Mode(FavoriteMovieGenre)))
 
 # userSiteMerge <- merge(x = userSite, y = userSite, by = "tdid", all = T)
@@ -167,14 +199,14 @@ siteDist <- as.dist(siteDistMat)
 k = 8
 pamSite <- pam(siteDist, k)
 
-impKnown$sitecluster <- sapply(as.character(impKnown$site), function(x) {
+impKnown$sitecluster <- factor(sapply(as.character(impKnown$site), function(x) {
     if (is.na(x)) {
         NA
     }
     else {
         pamSite$clustering[[x]]
     }
-})
+}))
 
 ggplot(impKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
     geom_bar(stat="bin") + 
@@ -200,35 +232,95 @@ ggplot(userSiteGenreKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre
     facet_grid(~ sitecluster)
 
 
-# let's try it now with users 
-numSites <- length(levels(userSite$site))
-numUsers <- length(levels(userSite$tdid))
-userSiteCounts <- matrix(rep(0, numUsers*numSites), nrow = numUsers, 
-    dimnames = list(levels(userSite$tdid), levels(userSite$site)))
 
-for (i in 1:nrow(userSite)) {
-    userSiteCounts[as.character(userSite[i,"tdid"]), as.character(userSite[i,"site"])] = 
-        userSiteCounts[as.character(userSite[i,"tdid"]), as.character(userSite[i,"site"])] + 1
-}
 
-# do clustering
-k = 7
-kmc <- kmeans(userSiteCounts, centers = k, iter.max = 1000)
 
-userGenre <- ddply(impKnown, .(tdid), summarize, 
+
+
+# # let's try it now with users 
+# # WAY 1
+# numSites <- length(levels(userSite$site))
+# numUsers <- length(levels(userSite$tdid))
+# userSiteCounts <- matrix(rep(0, numUsers*numSites), nrow = numUsers, 
+#     dimnames = list(levels(userSite$tdid), levels(userSite$site)))
+
+# for (i in 1:nrow(userSite)) {
+#     userSiteCounts[as.character(userSite[i,"tdid"]), as.character(userSite[i,"site"])] = 
+#         userSiteCounts[as.character(userSite[i,"tdid"]), as.character(userSite[i,"site"])] + 1
+# }
+
+# # do clustering
+# k = 5
+# #kmc <- kmeans(userSiteCounts, centers = k, iter.max = 1000)
+# pamUser <- clara(userSiteCounts, k, metric = 'manhattan')
+
+# userGenre <- ddply(impKnown, .(tdid), summarize, 
+#     FavoriteMovieGenre = Mode(FavoriteMovieGenre))
+
+# userGenre$sitecluster <- sapply(as.character(userGenre$tdid), function(x) {
+#     pamUser$clustering[[x]]
+# })
+
+# ggplot(userGenre, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+#     geom_bar(stat="bin") + 
+#     facet_grid(~ sitecluster)
+
+
+
+
+# WAY 2
+mergedUserSite <- merge(x = userSiteGenreData, y = userSiteGenreData, 
+    by = "site", all = T)
+
+userSplits <- split(mergedUserSite$tdid.x, mergedUserSite$tdid.y)
+numUsers <- length(userSplits)
+
+# userOverlapMat <- matrix(rep(0,numUsers*numUsers), nrow = numUsers, 
+#     dimnames = list(names(userSplits), names(userSplits)))
+
+# for (tdidi in names(userSplits)) {
+#     for (tdidj in as.character(userSplits[[tdidi]])) {
+#         if (!is.na(tdidj)) {
+#             userOverlapMat[tdidi, tdidj] = userOverlapMat[tdidi, tdidj] + 1
+#         }
+#     }
+# }
+
+# # Write matrix to file so we can re-load it later
+# write.csv(userOverlapMat, 'userOverlapMat.csv')
+
+# Read matrix from file
+userOverlapMat <- as.matrix(read.csv('userOverlapMat.csv', row.names=1))
+colnames(userOverlapMat) <- rownames(userOverlapMat)
+
+maxUserOverlap <- max(userOverlapMat) + 1
+userDistMat <- (maxUserOverlap - userOverlapMat)^2
+userDist <- as.dist(userDistMat)
+
+k = 12 # 11 is not bad
+pamUser <- pam(userDist, k)
+
+userGenreKnown <- ddply(impKnown, .(tdid), summarize, 
     FavoriteMovieGenre = Mode(FavoriteMovieGenre))
 
-userGenre$sitecluster <- sapply(as.character(userGenre$tdid), function(x) {
-    kmc$cluster[[x]]
-})
+userGenreKnown$usercluster <- sapply(as.character(userGenreKnown$tdid), 
+    function(x) {
+        pamUser$clustering[[x]]
+    }
+)
 
-ggplot(userGenre, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
+ggplot(userGenreKnown, aes(x = FavoriteMovieGenre, fill = FavoriteMovieGenre)) + 
     geom_bar(stat="bin") + 
-    facet_grid(~ sitecluster)
+    facet_grid(~ usercluster)
 
 
+impKnown$usercluster <- factor(sapply(as.character(impKnown$tdid), 
+    function(x) {
+        pamUser$clustering[[x]]
+    }
+))
 
-
+#~~~~~~~~~~~~~~~~ EXPLORATORY ANALYSIS ~~~~~~~~~~~~~~~~#
 
 # First let's explore favorite genre by hour of the day
 impKnown <- ddply(impKnown, .(userHourOfDay), transform, 
@@ -277,6 +369,8 @@ userKnown <- ddply(impKnown, .(tdid), summarize,
     usregion = Mode(usregion),
     userDayOfWeek = Mode(userDayOfWeek),
     userPeriodOfWeek = Mode(userPeriodOfWeek),
+    usercluster = Mode(usercluster),
+    sitecluster = Mode(sitecluster),
     english = as.logical(Mode(english)),
     usa = as.logical(Mode(usa)),
     userHourOfDay = mean(userHourOfDay),
@@ -302,7 +396,7 @@ userKnown <- ddply(impKnown, .(tdid), summarize,
     bGames = "Games" %in% sitecategory
 )
 rownames(userKnown) <- userKnown$tdid
-userKnown[2:13] <- as.data.frame(lapply(userKnown[2:13], factor))
+userKnown[2:15] <- as.data.frame(lapply(userKnown[2:15], factor))
 
 
 # Just the distribution of favorite genres
@@ -423,22 +517,26 @@ impVal   <- subset(impKnown, !split)
 impTrain$tdid <- as.factor(impTrain$tdid)
 impVal$tdid <- as.factor(impVal$tdid)
 
-rfFeatures <- c("tdid", "FavoriteMovieGenre", "userPeriodOfWeek", "Arts", "Business", 
-    "Science", "english", "devicetype",
+rfFeatures <- c("tdid", "FavoriteMovieGenre", "userPeriodOfWeek", 
+    "english", "devicetype", "usercluster", "usregion", "sitecategory",
+    "Arts", "Business", "Science", 
     "Computers", "Recreation", "Sports", "Society", "Health", "Home", "Games")
-    # "userHourOfDay", "userDayOfWeek", 
+    # "userHourOfDay", "userDayOfWeek", "sitecategory"
 
 rfImpTrain <- na.omit(impTrain[, rfFeatures])
 rfImpVal <- na.omit(impVal[, rfFeatures])
 
-rfMod <- randomForest(FavoriteMovieGenre ~ . - tdid, data = rfImpTrain)
+#rfMod <- randomForest(FavoriteMovieGenre ~ . - tdid, data = rfImpTrain)
+rfMod <- randomForest(FavoriteMovieGenre ~ . - tdid, 
+    data = rfImpTrain, 
+    trControl = trainControl(method = "cv"))
 rfMod
-rfPredTrain <- predict(rfMod)
-table(rfImpTrain$FavoriteMovieGenre, rfPredTrain)
 
+# model predictions on a per visit 
 rfPredVal <- predict(rfMod, newdata=rfImpVal)
 table(rfImpVal$FavoriteMovieGenre, rfPredVal)
 
+# training set predictions using the
 rfImpTrain$pred <- rfPredTrain
 rfUserTrain <- ddply(rfImpTrain, .(tdid), summarize,
     FavoriteMovieGenre = Mode(FavoriteMovieGenre),
@@ -453,10 +551,17 @@ rfUserVal <- ddply(rfImpVal, .(tdid), summarize,
 )
 table(rfUserVal$FavoriteMovieGenre, rfUserVal$pred)
 
+rfPredProbVal <- as.data.frame(predict(rfMod, newdata = rfImpVal, type="prob"))
+rfPredProbVal$tdid <- rfImpVal$tdid
+rfUserValPred <- ddply(rfPredProbVal, .(tdid), summarize,
+    BlindedGenre1 = mean(BlindedGenre1),
+    BlindedGenre2 = mean(BlindedGenre2),
+    BlindedGenre3 = mean(BlindedGenre3),
+    BlindedGenre4 = mean(BlindedGenre4),
+    BlindedGenre5 = mean(BlindedGenre5)
+)
 
-
-
-
+rfUserVal$meanpred <- colnames(rfUserValPred)[apply(rfUserValPred, 1, which.max)]
 
 
 
